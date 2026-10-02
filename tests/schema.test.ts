@@ -90,9 +90,9 @@ describe('WorkflowSchema Validation', () => {
   describe('RelationalSchemaValidator', () => {
     it('should validate a full valid schema', () => {
       const schema = {
-        workflows: [{ id: 'w1', name: 'Test' }],
+        workflows: [{ id: 'w1', name: 'Test', status: 'active' }],
         triggers: [{ id: 't1', eventName: 'test_event' }],
-        workflow_triggers: [{ workflowId: 'w1', triggerId: 't1', initialStepId: 'step_1' }],
+        workflow_triggers: [{ workflowId: 'w1', triggerId: 't1', initialStepId: 'step_1', status: 'inactive' }],
         workflow_actions: [
           {
             id: 'step_1',
@@ -105,6 +105,34 @@ describe('WorkflowSchema Validation', () => {
       };
       const result = RelationalSchemaValidator.safeParse(schema);
       expect(result.success).toBe(true);
+    });
+
+    it('should invalidate if workflow status is invalid string', () => {
+      const schema = {
+        workflows: [{ id: 'w1', name: 'Test', status: 'draft' }],
+        triggers: [],
+        workflow_triggers: [],
+        workflow_actions: []
+      };
+      const result = RelationalSchemaValidator.safeParse(schema);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain('Invalid option: expected one of "active"|"inactive"');
+      }
+    });
+
+    it('should invalidate if workflow_trigger status is missing', () => {
+      const schema = {
+        workflows: [{ id: 'w1', status: 'active' }],
+        triggers: [{ id: 't1', eventName: 'test_event' }],
+        workflow_triggers: [{ workflowId: 'w1', triggerId: 't1', initialStepId: 'step_1' }],
+        workflow_actions: []
+      };
+      const result = RelationalSchemaValidator.safeParse(schema);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain('Invalid option: expected one of "active"|"inactive"');
+      }
     });
   });
 });

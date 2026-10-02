@@ -1,3 +1,4 @@
+import { logger } from '../utils/Logger';
 import { Action } from './Action';
 import { Enrollment, RelationalWorkflowAction, ExecutionResult, ExecutionResultType } from '../types';
 
@@ -11,7 +12,7 @@ export class SendEmailAction implements Action {
     const template = stepDef.params?.template || 'default';
     
     // Stub logic for demonstration
-    console.log(`Sending email template '${template}' to contact ${contact.id} (${contact.email || 'no-email'})`);
+    logger.info(`Sending email template '${template}' to contact ${contact.id} (${contact.email || 'no-email'})`);
 
     // TODO [PRODUCTION]: Decouple email dispatch by offloading to an asynchronous transactional email
     // worker (e.g., SendGrid/AWS SES via Kafka/SQS).

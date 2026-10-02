@@ -1,9 +1,11 @@
 import { ConditionEvaluator } from './ConditionEvaluator';
 import { HasTagCondition } from './HasTagCondition';
+import { JexlCondition } from './JexlCondition';
 
 export class ConditionFactory {
   private static evaluators: Map<string, ConditionEvaluator> = new Map<string, ConditionEvaluator>([
-    ['has_tag', new HasTagCondition()]
+    ['has_tag', new HasTagCondition()],
+    ['jexl', new JexlCondition()]
   ]);
 
   /**
@@ -21,4 +23,3 @@ export class ConditionFactory {
     return evaluator;
   }
 }
-

@@ -1,3 +1,4 @@
+import { logger } from '../utils/Logger';
 import { IExecutionQueue } from './IExecutionQueue';
 import { Enrollment } from '../types';
 
@@ -20,7 +21,7 @@ export class MemoryExecutionQueue implements IExecutionQueue {
         try {
           await this.processFn(enrollment);
         } catch (err) {
-          console.error(`Failed to execute enrollment ${enrollment.id}:`, err);
+          logger.error(`Failed to execute enrollment ${enrollment.id}:`, err);
         }
       }
     }, 50);

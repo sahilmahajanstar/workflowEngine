@@ -1,6 +1,7 @@
 export interface RelationalWorkflow {
   id: string;
   name?: string;
+  status: 'active' | 'inactive';
 }
 
 export interface RelationalTrigger {
@@ -12,6 +13,7 @@ export interface RelationalWorkflowTrigger {
   workflowId: string;
   triggerId: string;
   initialStepId: string;
+  status: 'active' | 'inactive';
 }
 
 export interface RelationalWorkflowAction {

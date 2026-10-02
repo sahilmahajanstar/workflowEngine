@@ -1,5 +1,5 @@
 import { Enrollment } from '../types';
 
-export interface ConditionEvaluator {
-  evaluate(enrollment: Enrollment, params: any): boolean | Promise<boolean>;
+export interface ConditionEvaluator<T = any> {
+  evaluate(enrollment: Enrollment, params: T): boolean | Promise<boolean>;
 }

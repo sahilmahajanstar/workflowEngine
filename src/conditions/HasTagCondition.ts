@@ -2,8 +2,9 @@ import { ConditionEvaluator } from './ConditionEvaluator';
 import { Enrollment } from '../types';
 
 export class HasTagCondition implements ConditionEvaluator {
-  evaluate(enrollment: Enrollment, params: any): boolean {
+  evaluate(enrollment: Enrollment, params: { tag: string }): boolean {
     const { contact } = enrollment.context;
-    return Array.isArray(contact.tags) && contact.tags.includes(params.tag);
+    if (!contact || !contact.tags) return false;
+    return contact.tags.includes(params.tag);
   }
 }

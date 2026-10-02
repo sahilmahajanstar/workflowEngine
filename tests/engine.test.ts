@@ -9,9 +9,9 @@ describe('WorkflowEngine', () => {
   let engine: WorkflowEngine;
 
   const sampleSchema: RelationalSchema = {
-    workflows: [{ id: 'w1' }],
+    workflows: [{ id: 'w1', status: 'active' }],
     triggers: [{ id: 't1', eventName: 'test_event' }],
-    workflow_triggers: [{ workflowId: 'w1', triggerId: 't1', initialStepId: 'step1' }],
+    workflow_triggers: [{ workflowId: 'w1', triggerId: 't1', initialStepId: 'step1', status: 'active' }],
     workflow_actions: [
       { id: 'step1', workflowId: 'w1', type: 'send_email', params: { template: 'test' }, nextStepId: 'step2' },
       { id: 'step2', workflowId: 'w1', type: 'wait', params: { durationMs: 0 }, nextStepId: 'step3' },

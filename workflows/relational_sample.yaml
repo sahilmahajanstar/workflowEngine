@@ -1,15 +1,24 @@
 workflows:
   - id: "new-lead-nurture"
     status: active
+  - id: "admin-welcome"
+    status: active
 
 triggers:
   - id: "trigger_1"
     eventName: "form_submitted"
+  - id: "trigger_2"
+    eventName: "user_signed_up"
 
 workflow_triggers:
   - workflowId: "new-lead-nurture"
     triggerId: "trigger_1"
     initialStepId: "step_1"
+    status: active
+  - workflowId: "admin-welcome"
+    triggerId: "trigger_2"
+    initialStepId: "admin_step_1"
+    status: active
 
 workflow_actions:
   - id: "step_1"
@@ -59,3 +68,20 @@ workflow_actions:
     type: "send_email"
     params:
       template: "followup_email"
+  - id: "admin_step_1"
+    workflowId: "admin-welcome"
+    type: "condition"
+    params:
+      conditions:
+        - type: "jexl"
+          params:
+            expression: "'admin' in contact.tags"
+          branch: "is_admin"
+      defaultBranch: "not_admin"
+    branches:
+      "is_admin": "admin_step_2_yes"
+  - id: "admin_step_2_yes"
+    workflowId: "admin-welcome"
+    type: "send_email"
+    params:
+      template: "admin_template"

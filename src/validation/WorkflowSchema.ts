@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const WorkflowSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
+  status: z.enum(['active', 'inactive']),
 });
 
 export const TriggerSchema = z.object({
@@ -14,6 +15,7 @@ export const WorkflowTriggerSchema = z.object({
   workflowId: z.string(),
   triggerId: z.string(),
   initialStepId: z.string(),
+  status: z.enum(['active', 'inactive']),
 });
 
 export const WorkflowActionSchema = z.object({

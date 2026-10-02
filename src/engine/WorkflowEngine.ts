@@ -1,3 +1,4 @@
+import { logger } from '../utils/Logger';
 import { IEnrollmentRepository } from '../db/repositories/IEnrollmentRepository';
 import { IExecutionHistoryRepository } from '../db/repositories/IExecutionHistoryRepository';
 import { RelationalSchema, Contact, Enrollment, EnrollmentStatus, ExecutionResultType } from '../types';
@@ -61,21 +62,26 @@ export class WorkflowEngine {
   }
 
   loadSchema(schema: RelationalSchema) {
-    this.schema.workflows.push(...(schema.workflows || []));
+    const activeWorkflows = (schema.workflows || []).filter(w => w.status === 'active');
+    const activeWorkflowIds = activeWorkflows.map(w => w.id);
+
+    this.schema.workflows.push(...activeWorkflows);
     this.schema.triggers.push(...(schema.triggers || []));
-    this.schema.workflow_triggers.push(...(schema.workflow_triggers || []));
-    this.schema.workflow_actions.push(...(schema.workflow_actions || []));
+    this.schema.workflow_triggers.push(
+      ...(schema.workflow_triggers || []).filter(wt => activeWorkflowIds.includes(wt.workflowId) && wt.status === 'active')
+    );
+    this.schema.workflow_actions.push(...(schema.workflow_actions || []).filter(wa => activeWorkflowIds.includes(wa.workflowId)));
   }
 
   async recoverRunning() {
     const running = await this.enrollments.getByStatus(EnrollmentStatus.RUNNING);
     for (const enrollment of running) {
-      console.log(`Recovering stuck RUNNING enrollment: ${enrollment.id}`);
+      logger.info(`Recovering stuck RUNNING enrollment: ${enrollment.id}`);
       await this.executionQueue.push(enrollment);
     }
   }
 
-  async processEvent(eventName: string, contact: Contact): Promise<number> {
+  async processEvent(eventName: string, contact: Contact): Promise<Enrollment[]> {
     // 1. Find all triggers matching the eventName
     const triggers = this.schema.triggers.filter(t => t.eventName === eventName);
     const triggerIds = triggers.map(t => t.id);
@@ -84,14 +90,16 @@ export class WorkflowEngine {
     const workflowTriggers = this.schema.workflow_triggers.filter(wt => triggerIds.includes(wt.triggerId));
 
     // 3. Enroll contact in each mapped workflow
+    const enrollments: Enrollment[] = [];
     for (const wt of workflowTriggers) {
-      await this.enrollContact(wt.workflowId, wt.initialStepId, contact);
+      const enrollment = await this.enrollContact(wt.workflowId, wt.initialStepId, contact);
+      enrollments.push(enrollment);
     }
     
-    return workflowTriggers.length;
+    return enrollments;
   }
 
-  private async enrollContact(workflowId: string, initialStepId: string, contact: Contact) {
+  private async enrollContact(workflowId: string, initialStepId: string, contact: Contact): Promise<Enrollment> {
     const enrollment: Enrollment = {
       id: uuidv4(),
       workflowId: workflowId,
@@ -106,6 +114,8 @@ export class WorkflowEngine {
     
     // Push to internal queue instead of executing directly
     await this.executionQueue.push(enrollment);
+    
+    return enrollment;
   }
 
   async execute(enrollment: Enrollment) {

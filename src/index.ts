@@ -1,3 +1,4 @@
+import { logger } from './utils/Logger';
 import { IDatabase } from './db/IDatabase';
 import { SqliteDatabase } from './db/SqliteDatabase';
 import { PostgresDatabase } from './db/PostgresDatabase';
@@ -27,7 +28,7 @@ async function bootstrap() {
     db = new SqliteDatabase(dbPath);
   }
   await db.init();
-  console.log('Database initialized');
+  logger.info('Database initialized');
 
   const enrollmentsRepo = new TypeOrmEnrollmentRepository((db as any).dataSource);
   const historyRepo = new TypeOrmExecutionHistoryRepository((db as any).dataSource);
@@ -36,7 +37,7 @@ async function bootstrap() {
   let engine: WorkflowEngine;
   
   if (process.env.REDIS_HOST) {
-    console.log(`Connecting to Redis at ${process.env.REDIS_HOST}:${process.env.REDIS_PORT}...`);
+    logger.info(`Connecting to Redis at ${process.env.REDIS_HOST}:${process.env.REDIS_PORT}...`);
     const queue = new RedisExecutionQueue(
       { host: process.env.REDIS_HOST, port: parseInt(process.env.REDIS_PORT || '6379') },
       async (enrollment) => {
@@ -57,14 +58,14 @@ async function bootstrap() {
     // Validate schema
     const validationResult = RelationalSchemaValidator.safeParse(parsedSchema);
     if (!validationResult.success) {
-      console.error('Failed to validate workflow schema:', validationResult.error.format());
+      logger.error('Failed to validate workflow schema:', validationResult.error.format());
       process.exit(1); // Fail fast in production if workflows are invalid
     }
     
     engine.loadSchema(validationResult.data);
-    console.log(`Loaded relational schema from ${workflowFile}`);
+    logger.info(`Loaded relational schema from ${workflowFile}`);
   } else {
-    console.warn(`No workflows found at ${workflowFile}`);
+    logger.warn(`No workflows found at ${workflowFile}`);
   }
 
   // NOTE: With a persistent queue (Redis/Kafka), we NO LONGER need to manually
@@ -81,7 +82,7 @@ async function bootstrap() {
   const port = process.env.PORT || 3000;
 
   const server = app.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
+    logger.info(`Server listening on port ${port}`);
   });
 
   // Start polling
@@ -90,29 +91,29 @@ async function bootstrap() {
   // without race conditions or memory leaks across horizontally scaled worker nodes.
   const pollInterval = setInterval(() => {
     engine.resumeWaiting().catch(err => {
-      console.error('Error polling wait states:', err);
+      logger.error('Error polling wait states:', err);
     });
   }, 1 * 60 * 1000); // Check every 1 minute
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
-    console.log(`\nReceived ${signal}. Starting graceful shutdown...`);
+    logger.info(`\nReceived ${signal}. Starting graceful shutdown...`);
     clearInterval(pollInterval);
     
     server.close(() => {
-      console.log('HTTP server closed.');
+      logger.info('HTTP server closed.');
     });
 
     try {
       await engine.stopWorker();
-      console.log('Workflow worker queue stopped.');
+      logger.info('Workflow worker queue stopped.');
       if ((db as any).dataSource?.isInitialized) {
         await (db as any).dataSource.destroy();
-        console.log('Database connection pool closed.');
+        logger.info('Database connection pool closed.');
       }
       process.exit(0);
     } catch (err) {
-      console.error('Error during graceful shutdown:', err);
+      logger.error('Error during graceful shutdown:', err);
       process.exit(1);
     }
   };
@@ -121,5 +122,5 @@ async function bootstrap() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-bootstrap().catch(console.error);
+bootstrap().catch(logger.error);
 

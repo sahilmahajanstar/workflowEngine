@@ -1,3 +1,4 @@
+import { logger } from './utils/Logger';
 import express from 'express';
 import { WorkflowEngine } from './engine/WorkflowEngine';
 import { IExecutionHistoryRepository } from './db/repositories/IExecutionHistoryRepository';
@@ -35,8 +36,8 @@ export function createServer(engine: WorkflowEngine, historyRepo: IExecutionHist
 
       const { eventName, contact } = validationResult.data;
 
-      const enrolledCount = await engine.processEvent(eventName, contact);
-      if (enrolledCount === 0) {
+      const enrollments = await engine.processEvent(eventName, contact);
+      if (enrollments.length === 0) {
         return res.status(400).json({
           schemaVersion: "1.0",
           error: {
@@ -48,9 +49,13 @@ export function createServer(engine: WorkflowEngine, historyRepo: IExecutionHist
         });
       }
 
-      res.status(202).json({ schemaVersion: "1.0", data: { message: 'Event accepted', workflowsTriggered: enrolledCount } });
+      res.status(202).json({ schemaVersion: "1.0", data: { 
+        message: 'Event accepted', 
+        workflowsTriggered: enrollments.length,
+        enrollmentIds: enrollments.map(e => e.id)
+      } });
     } catch (err: any) {
-      console.error(err);
+      logger.error(err);
       res.status(500).json({
         schemaVersion: "1.0",
         error: {
@@ -94,7 +99,7 @@ export function createServer(engine: WorkflowEngine, historyRepo: IExecutionHist
 
       res.json({ schemaVersion: "1.0", data });
     } catch (err: any) {
-      console.error(err);
+      logger.error(err);
       res.status(500).json({
         schemaVersion: "1.0",
         error: {

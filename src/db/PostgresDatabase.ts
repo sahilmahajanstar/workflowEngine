@@ -1,3 +1,4 @@
+import { logger } from '../utils/Logger';
 import { DataSource } from 'typeorm';
 import { IDatabase } from './IDatabase';
 import { InitialMigration1700000000000 } from './migrations/1700000000000-InitialMigration';
@@ -17,7 +18,7 @@ export class PostgresDatabase implements IDatabase {
       database: process.env.DB_NAME || 'workflow',
       synchronize: false,
       migrationsRun: true,
-      logging: ['query', 'error', 'schema'],
+      logging: process.env.NODE_ENV === 'test' ? false : ['query', 'error', 'schema'],
       entities: [EnrollmentEntity, ExecutionHistoryEntity],
       migrations: [InitialMigration1700000000000],
     });
@@ -25,8 +26,8 @@ export class PostgresDatabase implements IDatabase {
 
   async init(): Promise<void> {
     await this.dataSource.initialize();
-    console.log('Running migrations...');
+    logger.info('Running migrations...');
     await this.dataSource.runMigrations();
-    console.log('Migrations complete');
+    logger.info('Migrations complete');
   }
 }

@@ -17,7 +17,7 @@ export const AppDataSource = new DataSource(
         password: process.env.DB_PASS || 'postgres',
         database: process.env.DB_NAME || 'workflow',
         synchronize: false,
-        logging: true,
+        logging: process.env.NODE_ENV === 'test' ? false : true,
         entities: [EnrollmentEntity, ExecutionHistoryEntity],
         migrations: [InitialMigration1700000000000],
       }
@@ -25,7 +25,7 @@ export const AppDataSource = new DataSource(
         type: 'sqlite',
         database: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'workflow.sqlite'),
         synchronize: false,
-        logging: true,
+        logging: process.env.NODE_ENV === 'test' ? false : true,
         entities: [EnrollmentEntity, ExecutionHistoryEntity],
         migrations: [InitialMigration1700000000000],
       }

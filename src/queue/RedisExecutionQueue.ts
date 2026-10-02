@@ -1,3 +1,4 @@
+import { logger } from '../utils/Logger';
 import { Queue, Worker, ConnectionOptions } from 'bullmq';
 import { IExecutionQueue } from './IExecutionQueue';
 import { Enrollment } from '../types';
@@ -22,7 +23,7 @@ export class RedisExecutionQueue implements IExecutionQueue {
     );
 
     this.worker.on('failed', (job, err) => {
-      console.error(`Job ${job?.id} failed:`, err);
+      logger.error(`Job ${job?.id} failed:`, err);
     });
   }
 
