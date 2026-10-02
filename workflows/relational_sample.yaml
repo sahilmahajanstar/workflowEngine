@@ -1,0 +1,61 @@
+workflows:
+  - id: "new-lead-nurture"
+    status: active
+
+triggers:
+  - id: "trigger_1"
+    eventName: "form_submitted"
+
+workflow_triggers:
+  - workflowId: "new-lead-nurture"
+    triggerId: "trigger_1"
+    initialStepId: "step_1"
+
+workflow_actions:
+  - id: "step_1"
+    workflowId: "new-lead-nurture"
+    type: "send_email"
+    params:
+      template: "welcome_email"
+    nextStepId: "step_2"
+  - id: "step_2"
+    workflowId: "new-lead-nurture"
+    type: "wait"
+    params:
+      durationMs: 10000 # 10 sec
+    nextStepId: "step_3"
+  - id: "step_3"
+    workflowId: "new-lead-nurture"
+    type: "condition"
+    params:
+      conditions:
+        - type: "has_tag"
+          params:
+            tag: "replied"
+          branch: "yes"
+      defaultBranch: "no"
+    branches:
+      "yes": "step_4_yes"
+      "no": "step_4_no"
+  - id: "step_4_yes"
+    workflowId: "new-lead-nurture"
+    type: "add_tag"
+    params:
+      tag: "engaged"
+    nextStepId: "step_5"
+  - id: "step_5"
+    workflowId: "new-lead-nurture"
+    type: "call_webhook"
+    params:
+      url: "https://httpbin.org/post"
+  - id: "step_4_no"
+    workflowId: "new-lead-nurture"
+    type: "wait"
+    params:
+      durationMs: 30000 # 30 Sec
+    nextStepId: "step_5_no"
+  - id: "step_5_no"
+    workflowId: "new-lead-nurture"
+    type: "send_email"
+    params:
+      template: "followup_email"
