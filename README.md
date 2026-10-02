@@ -69,7 +69,6 @@ curl http://localhost:3000/api/contacts/c123/history
 
 ### Assumptions Made
 - Workflows are defined in YAML configuration files loaded at startup.
-- Memory consumption isn't massive during evaluation, so SQLite handles the concurrency fine.
 - **Job Scheduling & Wait Precision**: To reduce scope and keep the architecture simple without introducing complex external job schedulers (like Temporal or BullMQ delayed jobs), we opted for **database polling**. A simple `setInterval` runs every 1 minute to sweep the database for expired wait statuses. This means wait task execution is **approximate** (within a 1-minute window). 
   - *Concurrency Cut*: If we were running multiple polling instances, this naive approach would cause a race condition where multiple workers pick up the same expired wait task. To fix this with database polling, we would use PostgreSQL's `FOR UPDATE SKIP LOCKED` query to exclusively lock rows during pickup. However, in a true production environment, we wouldn't use polling at all—we would delegate waits entirely to a dedicated distributed Job Scheduler.
 - **Simplicity Over Frameworks**: We actively avoided implementing a heavy framework like NestJS for this iteration to prioritize raw logical simplicity and demonstrate a firm grasp of core design patterns (like SOLID, Strategy, Dependency Injection) using bare Node.js/Express.
@@ -95,7 +94,6 @@ curl http://localhost:3000/api/contacts/c123/history
   - **Wait States**: Replace interval-based polling with a robust distributed timing wheel or a distributed queuing system (like Temporal, or Redis running on a cluster).
 - **Idempotencys**: To handle the "at-least-once" restarts gracefully, I'd implement Idempotency Keys on all external `call_webhook` requests, passing a unique `ExecutionID + StepID` so that external systems can safely deduplicate retries.
 - **Retry Mechanism**: Add a `retryCount` to the enrollment table and build a robust retry strategy with exponential backoff and jitter for HTTP failures.
-- **Validation**: Validate incoming YAML workflows using Zod to ensure schema correctness before loading them into the engine.
 - **Production Data Model**: Move away from static YAML loading to a normalized, relational database schema:
   - **Triggers**: A `trigger` table to define reusable trigger conditions.
   - **Workflow Triggers (`workflow_trigger`)**: A junction table linking multiple triggers to a single workflow, storing the `workflowId` and the specific `initialStepId` for each trigger entry point.
@@ -116,9 +114,7 @@ curl http://localhost:3000/api/contacts/c123/history
     - Small-to-medium businesses share resources on a pooled multi-tenant cluster to maintain cost efficiency. Limit number of workflow creation. Limit number of workflow enrollment base on plan
     - Large enterprise clients with massive workflow volume are provisioned on dedicated, isolated instances (or strictly partitioned Kafka topics/worker nodes).
     - An intelligent API Gateway/Routing layer will inspect the incoming `tenantId` and dynamically route the execution request to the appropriate cluster based on predefined capacity and tiering rules.
-- **Database Migrations & Schema**:
-  - **Assumption**: TypeORM `synchronize: true` was initially used for rapid prototyping to auto-create and alter tables on boot.
-  - **Production Solution**: `synchronize: true` is **strictly disabled** (`false`). We now use explicit, version-controlled Migration files (e.g., `1700000000000-InitialMigration.ts`) which are safely executed sequentially on boot (`migrationsRun: true`) or strictly via a CI/CD pipeline step. This ensures complete determinism and prevents accidental data loss during complex schema evolutions.
+
 
 ## AI Usage
 AI tools were used to quickly scaffold the boilerplate structure (package.json, Dockerfile) and generate the mock SQLite table schemas. The core architectural decisions and step transitions were explicitly defined and designed by me to guarantee correct behavior on failures.
