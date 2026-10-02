@@ -74,8 +74,10 @@ export class WorkflowEngine {
   }
 
   async recoverRunning() {
-    const running = await this.enrollments.getByStatus(EnrollmentStatus.RUNNING);
-    for (const enrollment of running) {
+    const fiveMinutesAgo = new Date(Date.now() - (5 * 60 * 1000));
+    const stuck = await this.enrollments.getStuckRunning(fiveMinutesAgo);
+    
+    for (const enrollment of stuck) {
       logger.info(`Recovering stuck RUNNING enrollment: ${enrollment.id}`);
       await this.executionQueue.push(enrollment);
     }
@@ -110,10 +112,11 @@ export class WorkflowEngine {
       context: { contact }
     };
 
-    await this.enrollments.create(enrollment);
-    
-    // Push to internal queue instead of executing directly
+    // Push to internal queue first instead of executing directly.
+    // If this fails, the error bubbles up, Kafka receives a NACK, and the message is safely retried.
     await this.executionQueue.push(enrollment);
+
+    await this.enrollments.create(enrollment);
     
     return enrollment;
   }
@@ -186,10 +189,12 @@ export class WorkflowEngine {
          enrollment.status = EnrollmentStatus.RUNNING;
       }
 
-      await this.enrollments.update(enrollment);
       if (enrollment.status === EnrollmentStatus.RUNNING) {
+         // Push to queue first to ensure Kafka-driven retries can safely re-attempt on failure.
          await this.executionQueue.push(enrollment);
       }
+
+      await this.enrollments.update(enrollment);
     }
   }
 }

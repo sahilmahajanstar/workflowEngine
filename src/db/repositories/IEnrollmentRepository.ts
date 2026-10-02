@@ -6,5 +6,6 @@ export interface IEnrollmentRepository {
   update(enrollment: Enrollment): Promise<void>;
   getPendingWaits(now: number): Promise<Enrollment[]>;
   getByStatus(status: EnrollmentStatus): Promise<Enrollment[]>;
+  getStuckRunning(beforeDate: Date): Promise<Enrollment[]>;
   getByContactId(contactId: string): Promise<Enrollment[]>;
 }

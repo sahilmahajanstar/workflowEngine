@@ -1,4 +1,4 @@
-import { DataSource, LessThanOrEqual } from 'typeorm';
+import { DataSource, LessThanOrEqual, LessThan } from 'typeorm';
 import { Enrollment, EnrollmentStatus } from '../../types';
 import { EnrollmentEntity } from '../entities/EnrollmentEntity';
 import { IEnrollmentRepository } from './IEnrollmentRepository';
@@ -37,6 +37,17 @@ export class TypeOrmEnrollmentRepository implements IEnrollmentRepository {
   async getByStatus(status: EnrollmentStatus): Promise<Enrollment[]> {
     const repo = this.dataSource.getRepository(EnrollmentEntity);
     const rows = await repo.find({ where: { status } });
+    return rows as Enrollment[];
+  }
+
+  async getStuckRunning(beforeDate: Date): Promise<Enrollment[]> {
+    const repo = this.dataSource.getRepository(EnrollmentEntity);
+    const rows = await repo.find({ 
+      where: { 
+        status: EnrollmentStatus.RUNNING,
+        updatedAt: LessThan(beforeDate)
+      } 
+    });
     return rows as Enrollment[];
   }
 
