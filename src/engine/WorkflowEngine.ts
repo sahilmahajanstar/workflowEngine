@@ -112,11 +112,12 @@ export class WorkflowEngine {
       context: { contact }
     };
 
-    // Push to internal queue first instead of executing directly.
-    // If this fails, the error bubbles up, Kafka receives a NACK, and the message is safely retried.
-    await this.executionQueue.push(enrollment);
-
+    // We MUST write to the database first! 
+    // If we push to the queue first, the worker might finish the job and update the DB to COMPLETED
+    // *before* this thread writes RUNNING, which would overwrite the completed state (Race Condition).
+    // If the queue push fails here, the fallback sweeper (recoverRunning) will safely catch it.
     await this.enrollments.create(enrollment);
+    await this.executionQueue.push(enrollment);
     
     return enrollment;
   }
@@ -131,6 +132,9 @@ export class WorkflowEngine {
       throw new Error(`Workflow ${enrollment.workflowId} not found`);
     }
 
+    // TODO [PRODUCTION]: Replace this `while` loop with Single-Step Execution. 
+    // Currently, if a node crashes on Step C, the Kafka message for Step A is retried, causing A and B to run again. 
+    // In production, a worker will process exactly ONE action and then push a NEW message to the queue for the next step.
     while (enrollment.currentStepId && enrollment.status === EnrollmentStatus.RUNNING) {
       const stepDef = this.schema.workflow_actions.find(a => a.workflowId === enrollment.workflowId && a.id === enrollment.currentStepId);
       
@@ -189,12 +193,13 @@ export class WorkflowEngine {
          enrollment.status = EnrollmentStatus.RUNNING;
       }
 
+      // We update the DB first to prevent a race condition where the worker finishes
+      // and writes COMPLETED before we write RUNNING.
+      await this.enrollments.update(enrollment);
+
       if (enrollment.status === EnrollmentStatus.RUNNING) {
-         // Push to queue first to ensure Kafka-driven retries can safely re-attempt on failure.
          await this.executionQueue.push(enrollment);
       }
-
-      await this.enrollments.update(enrollment);
     }
   }
 }
