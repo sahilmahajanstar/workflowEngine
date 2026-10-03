@@ -68,16 +68,18 @@ async function bootstrap() {
     logger.warn(`No workflows found at ${workflowFile}`);
   }
 
-  // NOTE: With a persistent queue (Redis/Kafka), we NO LONGER need to manually
-  // sweep the SQL database to recover RUNNING workflows on boot. The persistent 
-  // queue guarantees they aren't lost across server restarts!
-  if (!process.env.REDIS_HOST) {
-    // TODO [PRODUCTION]: If relying purely on Postgres without a durable message broker,
-    // implement a robust sweep mechanism with row-level locks (SKIP LOCKED) to prevent
-    // multiple worker nodes from picking up the same stale RUNNING jobs.
-    await engine.recoverRunning();
-  }
-
+  // Start the background sweeper to catch any Dual-Write queue failures
+  // This runs once on startup and then every 5 minutes.
+  // TODO [PRODUCTION]: At scale with multiple worker nodes, ensure this uses row-level locks (SKIP LOCKED)
+  // or offload this to a single dedicated Cron job to prevent multiple workers from sweeping concurrently.
+  await engine.recoverRunning().catch(err => logger.error('Error during initial recovery:', err));
+  
+  const recoverInterval = setInterval(() => {
+    engine.recoverRunning().catch(err => {
+      logger.error('Error in recovery sweeper:', err);
+    });
+  }, 5 * 60 * 1000); // 5 minutes
+  
   const app = createServer(engine, historyRepo, enrollmentsRepo);
   const port = process.env.PORT || 3000;
 
@@ -99,6 +101,7 @@ async function bootstrap() {
   const shutdown = async (signal: string) => {
     logger.info(`\nReceived ${signal}. Starting graceful shutdown...`);
     clearInterval(pollInterval);
+    clearInterval(recoverInterval);
     
     server.close(() => {
       logger.info('HTTP server closed.');

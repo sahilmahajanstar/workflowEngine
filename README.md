@@ -1,126 +1,674 @@
 # Workflow Automation Engine
 
-A scalable and extensible workflow automation backend built in Node.js and TypeScript, applying SOLID principles and common design patterns.
+A scalable and extensible workflow automation backend built with **Node.js and TypeScript**.
+
+The engine supports event-driven workflow execution with actions such as sending emails, adding tags, calling webhooks, waiting for a specified duration, and conditional branching.
+
+The design prioritizes:
+
+- Extensibility
+- Failure recovery
+- Persistent workflow state
+- Clear separation of concerns
+- Testability
+- Simple deployment and operation
+
+---
 
 ## Architecture & Design Decisions
 
-### 1. Strategy Pattern (Polymorphism & Interfaces)
-**Why we used it:** The workflow engine orchestrates a variety of steps (`send_email`, `call_webhook`, `wait`, `condition`, etc.), and new types of steps will inevitably be required as the product grows.
-- By defining a common `Action` interface, we achieve **Polymorphism**. The core `WorkflowEngine` simply calls `await action.execute(enrollment, params)`, remaining completely agnostic to the underlying action's business logic. 
-- The `ActionFactory` acts as a dynamic registry leveraging the **Strategy Pattern**. Instead of hardcoding massive `switch` or `if/else` statements that violate the Open-Closed Principle (OCP), new actions are registered dynamically (e.g., `ActionFactory.registerAction('sms', new SendSmsAction())`). 
-- **Inheritance/Implementation**: Each specific action class strictly implements the `Action` interface. This enforces a contract ensuring every step safely returns an `ExecutionResult` that dictates the engine state transitions (`PROCEED`, `WAIT`, or `ERROR`).
+### 1. Strategy Pattern — Extensible Actions
+
+Workflow steps can represent different types of actions such as:
+
+- `send_email`
+- `add_tag`
+- `call_webhook`
+- `wait`
+- `condition`
+
+Each action implements a common `Action` interface.
+
+```text
+WorkflowEngine
+      |
+      v
+ ActionFactory
+      |
+      +---- SendEmailAction
+      +---- AddTagAction
+      +---- WebhookAction
+      +---- WaitAction
+      +---- ConditionAction
+```
+
+The engine only understands the action contract:
+
+```typescript
+await action.execute(enrollment, params)
+```
+
+It does not need to know the implementation details of individual actions.
+
+The `ActionFactory` acts as a registry, allowing new action types to be added without modifying the core workflow engine.
+
+For example:
+
+```typescript
+ActionFactory.registerAction(
+  'sms',
+  new SendSmsAction()
+);
+```
+
+This follows the **Open-Closed Principle**: the engine can be extended with new actions without changing the orchestration logic.
+
+Each action returns an `ExecutionResult`, which tells the engine how execution should proceed:
+
+- `PROCEED`
+- `WAIT`
+- `ERROR`
+
+---
 
 ### 2. Repository Pattern
-**Why we used it:** Database technology and ORMs often evolve. We must not tightly couple our core orchestration logic to a specific SQL dialect or ORM library.
-- We abstracted all data access behind domain-specific interfaces (`IEnrollmentRepository` and `IExecutionHistoryRepository`). 
-- The `WorkflowEngine` operates entirely against these interfaces (Dependency Inversion Principle). If we need to move from SQLite to a distributed PostgreSQL cluster, or migrate from TypeORM to Prisma, the engine code remains completely untouched. We simply inject a new Repository implementation.
 
-### 3. Stateless Execution
-Instead of keeping in-memory timers (which cause memory leaks and die on server restarts), the engine handles `wait` states statelessly by persisting `waitUntil` and `status=waiting` in the database. A centralized worker polls and re-queues them. This guarantees the system can horizontally scale across multiple pods without losing state.
+The workflow engine should not depend directly on a particular database or ORM.
+
+Database access is abstracted behind domain-specific repository interfaces such as:
+
+- `IEnrollmentRepository`
+- `IExecutionHistoryRepository`
+
+The workflow engine depends on these interfaces rather than the underlying persistence implementation.
+
+This follows the **Dependency Inversion Principle** and makes it possible to replace the persistence layer without changing the orchestration logic.
+
+For example, the current implementation can use SQLite while a production deployment could use PostgreSQL.
+
+---
+
+### 3. Persistent Workflow State
+
+Workflow execution state is persisted rather than kept entirely in memory.
+
+This is particularly important for `wait` actions.
+
+Instead of keeping an in-memory timer such as:
+
+```typescript
+setTimeout(...)
+```
+
+the engine persists:
+
+```text
+status = WAITING
+waitUntil = <future timestamp>
+```
+
+A worker periodically checks for expired waits and resumes those workflows.
+
+This means a process restart does not cause a waiting workflow to lose its state.
+
+Wait execution is intentionally approximate and may resume within the polling interval.
+
+---
+
+### 4. Failure Semantics
+
+The current implementation provides **at-least-once execution semantics**.
+
+If the process crashes after an external action has completed but before the database state is updated, the action may be executed again after recovery.
+
+For example:
+
+```text
+Workflow
+   |
+   v
+call_webhook
+   |
+   +---- Webhook succeeds
+   |
+   +---- Process crashes before DB update
+   |
+   v
+Recovery
+   |
+   v
+Webhook may execute again
+```
+
+Therefore, the engine does not provide exactly-once execution for external side effects.
+
+External integrations should use an idempotency key such as:
+
+```text
+enrollmentId + stepId
+```
+
+to safely handle duplicate execution.
+
+This trade-off is intentional for the scope of the take-home assignment.
+
+---
 
 ## Running the Application
 
-### Using Docker (Recommended)
+### Using Docker — Recommended
 
-Run the application entirely inside Docker using Docker Compose:
+Run the application using Docker Compose:
 
 ```bash
 docker-compose up --build
 ```
 
-The application runs on port `3000`.
+The application will be available on:
+
+```text
+http://localhost:3000
+```
 
 ### Local Setup
 
-1. Install dependencies: `npm install`
-2. Start in dev mode: `npm run dev`
-3. Or build and start: `npm run build && npm start`
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run in development mode:
+
+```bash
+npm run dev
+```
+
+Or build and start:
+
+```bash
+npm run build
+npm start
+```
+
+---
 
 ## Testing
 
-Run tests using Jest:
+Run the test suite with:
 
 ```bash
 npm run test
 ```
 
-## API Endpoints
+The tests focus on the core workflow execution and state-transition logic.
+
+---
+
+## API
 
 ### 1. Ingest Event
-Triggers an event for a contact, enrolling them in matching workflows.
+
+Triggers an event for a contact and enrolls the contact in workflows whose trigger matches the event.
 
 ```bash
 curl -X POST http://localhost:3000/api/events \
   -H "Content-Type: application/json" \
   -d '{
     "eventName": "form_submitted",
-    "contact": { "id": "c123", "email": "test@example.com", "tags": [] }
+    "contact": {
+      "id": "c123",
+      "email": "test@example.com",
+      "tags": []
+    }
   }'
 ```
 
-### 2. View History
-Check a contact's run history.
+### 2. View Contact History
+
+Retrieve the execution history for a contact:
 
 ```bash
 curl http://localhost:3000/api/contacts/c123/history
 ```
 
-## Assumptions, Cuts, & Next Steps
+The history records which workflow steps were executed, when they executed, and their outcome.
 
-### Assumptions Made
-- Workflows are defined in YAML configuration files loaded at startup.
-- **Job Scheduling & Wait Precision**: To reduce scope and keep the architecture simple without introducing complex external job schedulers (like Temporal or BullMQ delayed jobs), we opted for **database polling**. A simple `setInterval` runs every 1 minute to sweep the database for expired wait statuses. This means wait task execution is **approximate** (within a 1-minute window). 
-  - *Concurrency Cut*: If we were running multiple polling instances, this naive approach would cause a race condition where multiple workers pick up the same expired wait task. To fix this with database polling, we would use PostgreSQL's `FOR UPDATE SKIP LOCKED` query to exclusively lock rows during pickup. However, in a true production environment, we wouldn't use polling at all—we would delegate waits entirely to a dedicated distributed Job Scheduler.
-- **Simplicity Over Frameworks**: We actively avoided implementing a heavy framework like NestJS for this iteration to prioritize raw logical simplicity and demonstrate a firm grasp of core design patterns (like SOLID, Strategy, Dependency Injection) using bare Node.js/Express.
-- **At-Least-Once Execution**: If the engine restarts abruptly during an active step (e.g., *after* a webhook is called but *before* the database updates the enrollment status), the engine will resume that step from the beginning upon restart. This provides "at-least-once" execution semantics, meaning external actions like API calls may execute twice in the event of a sudden crash. Idempotency is not handled by the engine and must be managed by the dependent external workers (e.g., an email service should verify it hasn't already processed an action for a given `enrollmentId` + `stepId`).
-- **Duplicate Enrollments**: A single customer triggering an event multiple times (e.g., submitting a form twice) will generate multiple concurrent enrollments. The engine's job is purely to execute events as they arrive; deduplication or re-entry constraints are out of scope.
-- **Error Handling & Dashboard Retries**: 
-  - Retriable errors (like a 500 status from a 3rd party Webhook or a network timeout) transition the enrollment into an `ERROR` state.
-  - Non-retriable errors (like a 400 Bad Request indicating a mismatched payload) transition into a terminal `FAILED` state.
-  - **Assumption**: Currently, there is no automatic exponential backoff retry. In production, 3rd party webhooks would be retried automatically for X days. If it still fails, it remains in the `ERROR` state so a human can manually trigger a retry from a UI Dashboard. For internal tooling/jobs, failures would be pushed to a DLQ (Dead Letter Queue) after multiple automatic retries so they can be processed once the internal service payload is fixed.
-- **Workflow Versioning Out of Scope**: It is currently assumed that workflows are static and cannot be edited in place once created. If a user wishes to "edit" a workflow, they must recreate it by copying the existing one and making a new version. This prevents in-flight enrollments from crashing due to missing steps or invalid state transitions.
+---
 
-### What Was Cut
-- **Fully Distributed Job Queue**: I didn't use distributed Queue for message processing to minimize external dependencies and complexity for a take-home, opting to use SQLite as a simple job queue instead.
-- **Robust Error Handling on Webhooks**: The `call_webhook` action has a basic 5-second timeout, but it doesn't implement exponential backoff retry.
-- **Comprehensive DB Migrations**: I used simple `CREATE TABLE IF NOT EXISTS`. In production, I'd use Orm for migration
-- **Authentication & Security**: Service-to-service authentication (e.g., mTLS, JWT verification) and API Authorization logic are out of scope for this MVP but are required for production.
+# Assumptions, Trade-offs & Scope
 
-### What I'd Do With More Time (Production & High Scale)
-- **High-Scale Architecture**: Move from a monolithic single-node engine to horizontally scalable worker nodes. I would introduce an event bus (e.g., Apache Kafka) to ingest events securely at massive scale without dropping them.
-- **Handling 20k+ RPS**: At 20,000 requests per second, a standard relational database (like a single Postgres instance) will become a severe bottleneck due to write locks. To handle this scale:
-  - **Ingestion**: Use an event streaming platform (e.g., Apache Kafka) to buffer incoming events. Kafka easily absorbs 20k RPS and allows worker nodes to consume events at their own pace.
-  - **State Storage & ORM Connection Pooling**: We are currently using **TypeORM**. In production, migrating from SQLite to PostgreSQL is as simple as switching the driver configuration. We would explicitly configure TypeORM's connection pool (`poolSize: 50`) to handle high concurrent writes securely. For the current SQLite setup, we've enabled `PRAGMA journal_mode = WAL;` to mimic concurrent reads/writes. To support 20k RPS without locking, we would need to shard this across distributed PostgreSQL databases (like Citus) or move to a high-throughput NoSQL database like DynamoDB or Cassandra.
-  - **Wait States**: Replace interval-based polling with a robust distributed timing wheel or a distributed queuing system (like Temporal, or Redis running on a cluster).
-- **Idempotencys**: To handle the "at-least-once" restarts gracefully, I'd implement Idempotency Keys on all external `call_webhook` requests, passing a unique `ExecutionID + StepID` so that external systems can safely deduplicate retries.
-- **Retry Mechanism**: Add a `retryCount` to the enrollment table and build a robust retry strategy with exponential backoff and jitter for HTTP failures.
-- **Production Data Model**: Move away from static YAML loading to a normalized, relational database schema:
-  - **Triggers**: A `trigger` table to define reusable trigger conditions.
-  - **Workflow Triggers (`workflow_trigger`)**: A junction table linking multiple triggers to a single workflow, storing the `workflowId` and the specific `initialStepId` for each trigger entry point.
-  - **Workflow Actions (`workflow_action`)**: A table to store individual action nodes (steps) securely in the database instead of a local JSON blob.
-  - **Distributed Scheduler**: Instead of the basic interval poller, `wait` actions would push a scheduled task to a distributed scheduler (like Temporal, AWS EventBridge Scheduler, or BullMQ) to resume the execution context reliably at the exact future timestamp.
-- **Asynchronous Worker Offloading (Emails/Webhooks)**: 
-  - **Assumption**: Currently, there is no rate limiting on sending emails, and blocking I/O happens sequentially in the engine.
-  - **Production Solution**: To prevent pending workflows from being bottlenecked by slow I/O or failing APIs, actions like `send_email`, `sms`, and `call_webhook` will be entirely delegated to separate background worker queues.
-  - The workflow engine will generate a `refId`, place the job on a message broker (e.g., Kafka), and put the workflow into a `WAITING_FOR_RESPONSE` state (keeping time-based `WAITING` separate). 
-  - The specialized worker is responsible for executing the task, managing provider-specific rate limits, and handling its own retry logic. 
-  - Upon success, the worker publishes an acknowledgment event back to the workflow system. The engine listens for this event, matches the `refId`, and resumes the workflow to execute the `nextActionId`.
-- **Single-Step Execution (No `while` loops)**:
-  - **Current Implementation**: The engine uses a `while` loop to execute consecutive steps in-memory. If a workflow runs Step A, Step B, and crashes on Step C, the initial queue message is NACKed and retried. Depending on how state is loaded, this can cause Step A and Step B to be incorrectly re-executed, making strict idempotency extremely difficult.
-  - **Production Solution**: The `while` loop will be completely removed. A worker will process **exactly one step** at a time. If the step results in a `PROCEED` state, the worker will insert the new `currentStepId` into the database and push a brand new message to Kafka for that next step. This "event-driven chaining" ensures every single step is an isolated, independently scalable, and independently retriable transaction.
-- **Persistent Execution Queue**: 
-  - **Current Implementation**: We implemented an abstracted queue system using **Redis (BullMQ)** for durable, persistent queueing (with an in-memory fallback for local tests).
-  - **Production Solution**: At massive scale, we would transition from Redis to **Kafka** as the primary event stream and persistent execution queue. Kafka guarantees distributed durability, infinite replayability, and strict ordering without being bound by memory limits, completely eliminating the need for SQL sweeps during recovery.
-- **Database and Queue Consistency (Zero Message Drop-Off at Scale)**: 
-  - **Current Implementation**: When enrolling a contact or resuming a workflow, the engine **writes to the database first**, before pushing the job to the execution queue. If we pushed to the queue first, a fast worker could complete the job and write a `COMPLETED` state to the database before the original thread finishes writing its initial `RUNNING` state, creating a devastating race condition that corrupts the workflow. Because we write to the database first, we risk a 'Dual-Write' drop-off if the subsequent queue push fails. To safely mitigate this, we rely on a highly efficient database-level sweeper (`recoverRunning`) that periodically queries for stuck tasks (in `RUNNING` state for >5 minutes) and safely requeues them.
-  - **Production Solution**: To handle 20,000+ RPS without the overhead of sweepers or synchronous DB locks, we would transition to a pure **Kafka-First Event Sourcing** architecture. In this model, the API does not write to the database at all. It strictly pushes the event to Kafka and returns. Background workers consume from Kafka, execute the logic, and update the database as a secondary state. If the queue push fails, the API simply returns an error to the client, preventing any phantom database states. By relying entirely on Kafka's consumer offsets to drive state changes, we guarantee absolute consistency and eliminate race conditions at massive scale.
-- **Multi-Tenancy & Noisy Neighbors**: 
-  - **Assumption**: The current design assumes a single-tenant environment.
-  - **Production Solution**: In a multi-tenant SaaS, high-volume users can cause a "noisy neighbor" effect, starving smaller users of compute resources. To resolve this, a **hybrid tenancy architecture** should be employed:
-    - Small-to-medium businesses share resources on a pooled multi-tenant cluster to maintain cost efficiency. Limit number of workflow creation. Limit number of workflow enrollment base on plan
-    - Large enterprise clients with massive workflow volume are provisioned on dedicated, isolated instances (or strictly partitioned Kafka topics/worker nodes).
-    - An intelligent API Gateway/Routing layer will inspect the incoming `tenantId` and dynamically route the execution request to the appropriate cluster based on predefined capacity and tiering rules.
+## Assumptions
 
+### Workflow Configuration
 
-## AI Usage
-AI tools were used to quickly scaffold the boilerplate structure (package.json, Dockerfile) and generate the mock SQLite table schemas. The core architectural decisions and step transitions were explicitly defined and designed by me to guarantee correct behavior on failures.
+Workflows are defined in YAML configuration files and loaded when the application starts.
+
+Workflow versioning is intentionally outside the scope of this assignment.
+
+A workflow should be treated as immutable once enrollments have started. To modify an existing workflow, a new version can be created.
+
+This prevents an in-flight enrollment from referencing a step that no longer exists.
+
+---
+
+### Wait Scheduling
+
+The current implementation uses database polling for wait states.
+
+A worker periodically checks for workflows where:
+
+```text
+status = WAITING
+waitUntil <= currentTime
+```
+
+and resumes them.
+
+The polling interval is currently one minute, so wait execution is approximate rather than exact.
+
+For multiple workers, database-level locking such as PostgreSQL's:
+
+```sql
+FOR UPDATE SKIP LOCKED
+```
+
+would be required to prevent multiple workers from picking up the same waiting workflow.
+
+At production scale, I would replace polling with a dedicated distributed scheduler.
+
+---
+
+### At-Least-Once Execution
+
+The engine intentionally provides at-least-once execution.
+
+If the process crashes during an action, the action may be retried after recovery.
+
+This is particularly relevant for external side effects such as:
+
+- Webhook calls
+- Emails
+- SMS
+- Other external APIs
+
+Exactly-once execution cannot be guaranteed solely by the workflow engine when interacting with external systems.
+
+Instead, external actions should support idempotency using a unique execution/step identifier.
+
+---
+
+### Duplicate Events
+
+Multiple identical events for the same contact result in multiple workflow enrollments.
+
+For example, if a contact submits the same form twice:
+
+```text
+form_submitted
+      |
+      +---- Enrollment 1
+      |
+      +---- Enrollment 2
+```
+
+Event deduplication and workflow re-entry policies are outside the scope of this implementation.
+
+---
+
+### Webhook Errors & Retries
+
+Webhook failures are classified into two categories.
+
+**Retriable errors**
+
+Examples:
+
+- HTTP 5xx
+- Network timeout
+- Connection failure
+
+These transition the enrollment into an `ERROR` state.
+
+**Non-retriable errors**
+
+Examples:
+
+- HTTP 400
+- Invalid request payload
+
+These transition the enrollment into a terminal `FAILED` state.
+
+The current implementation does not perform automatic exponential-backoff retries.
+
+In production, I would add:
+
+```text
+retryCount
+nextRetryAt
+backoff
+jitter
+```
+
+and automatically retry transient failures.
+
+After the retry limit is exhausted, the workflow could remain in `ERROR` for manual retry or be moved to a dead-letter queue depending on the type of workload.
+
+---
+
+# What Was Intentionally Cut
+
+The assignment is scoped to approximately 5–6 hours, so several production concerns were intentionally not implemented.
+
+### Distributed Job Queue
+
+The current implementation keeps the execution model simple and uses the database for persistent state.
+
+A production system would use a dedicated distributed queue such as Kafka, RabbitMQ, or a managed queue service.
+
+### Advanced Webhook Retry
+
+The webhook action currently has a timeout but does not implement exponential backoff and jitter.
+
+### Database Migrations
+
+The current implementation uses:
+
+```sql
+CREATE TABLE IF NOT EXISTS
+```
+
+For production, I would use a proper migration framework and versioned database migrations.
+
+### Authentication & Authorization
+
+Authentication, authorization, tenant isolation, mTLS/JWT validation, and other service-to-service security concerns are outside the scope of this take-home.
+
+---
+
+# Production Evolution
+
+With significantly higher traffic and stronger reliability requirements, I would evolve the architecture in the following areas.
+
+## 1. Horizontally Scalable Workers
+
+Separate workflow ingestion from workflow execution:
+
+```text
+                +----------------+
+                |   API Gateway  |
+                +-------+--------+
+                        |
+                        v
+                +---------------+
+                | Event Stream  |
+                |    Kafka      |
+                +-------+-------+
+                        |
+              +---------+---------+
+              |         |         |
+              v         v         v
+           Worker     Worker     Worker
+              |         |         |
+              +---------+---------+
+                        |
+                        v
+                    Database
+```
+
+This allows ingestion and execution capacity to scale independently.
+
+---
+
+## 2. High-Throughput Ingestion
+
+At substantially higher traffic levels, I would decouple event ingestion from workflow execution using Kafka or another durable event streaming platform.
+
+The API would publish events to the stream, allowing workers to consume and process them asynchronously.
+
+This also provides buffering during traffic spikes.
+
+---
+
+## 3. Persistent Workflow State
+
+The current SQLite implementation is intentionally simple for the assignment.
+
+For production, I would move to PostgreSQL or another distributed persistence layer and configure connection pooling appropriately.
+
+SQLite currently uses WAL mode to improve concurrent read/write behavior.
+
+At very high scale, state storage could be partitioned or moved to a distributed datastore depending on the access patterns.
+
+---
+
+## 4. Distributed Wait Scheduler
+
+Instead of polling the database every minute, wait states could be scheduled through a distributed scheduler such as:
+
+- Temporal
+- AWS EventBridge Scheduler
+- BullMQ/Redis
+- Another managed delayed-job system
+
+The scheduler would resume a workflow at its required timestamp.
+
+---
+
+## 5. Idempotency
+
+To handle at-least-once execution safely, external actions should receive an idempotency key:
+
+```text
+executionId + stepId
+```
+
+For example:
+
+```http
+Idempotency-Key: execution-123-step-4
+```
+
+The external service can then safely ignore duplicate requests for the same logical execution.
+
+---
+
+## 6. Retry Strategy
+
+Transient failures should be retried using exponential backoff and jitter.
+
+For example:
+
+```text
+Attempt 1 → immediate
+Attempt 2 → 1s
+Attempt 3 → 5s
+Attempt 4 → 30s
+...
+```
+
+The retry policy would depend on the action type and error category.
+
+---
+
+## 7. Production Data Model
+
+The current workflow configuration is loaded from YAML for simplicity.
+
+A production system would persist workflow definitions in a database.
+
+A possible model would contain:
+
+```text
+Workflow
+   |
+   +---- WorkflowTrigger
+   |
+   +---- WorkflowStep
+              |
+              +---- Action configuration
+              +---- Next step
+```
+
+This would support:
+
+- Workflow versioning
+- Dynamic workflow creation
+- Multiple trigger types
+- Workflow editing
+- Auditing
+- Per-tenant configuration
+
+---
+
+## 8. Asynchronous Action Workers
+
+Slow external actions such as emails, SMS, and webhooks should not block the workflow engine.
+
+Instead:
+
+```text
+Workflow Engine
+      |
+      v
+Create execution reference
+      |
+      v
+Message Queue
+      |
+      +---- Email Worker
+      |
+      +---- SMS Worker
+      |
+      +---- Webhook Worker
+```
+
+The workflow engine would transition into a state such as:
+
+```text
+WAITING_FOR_ACTION
+```
+
+The specialized worker would execute the action and publish a completion event containing the execution reference.
+
+The workflow engine could then resume from the next step.
+
+This separates workflow orchestration from provider-specific concerns such as rate limiting, retries, and external API failures.
+
+---
+
+## 9. Single-Step Execution
+
+The current implementation can execute consecutive steps within a single worker invocation.
+
+For example:
+
+```text
+A → B → C
+```
+
+If the process crashes while executing `C`, previously executed steps may need to be replayed depending on when state was persisted.
+
+For a production implementation, I would make each step an independently persisted execution unit:
+
+```text
+Execute A
+   |
+   v
+Persist nextStep = B
+   |
+   v
+Queue B
+   |
+   v
+Execute B
+   |
+   v
+Persist nextStep = C
+   |
+   v
+Queue C
+```
+
+This makes each workflow step independently retryable and significantly simplifies failure recovery.
+
+---
+
+## 10. Database / Queue Consistency
+
+One important failure window exists when both the database and a queue are involved.
+
+The current approach persists workflow state before enqueueing execution:
+
+```text
+Database write
+      |
+      v
+Queue publish
+```
+
+This avoids a race where a worker completes a job before its initial database state has been persisted.
+
+However, it introduces a possible dual-write failure:
+
+```text
+DB write succeeds
+      |
+      X
+Queue publish fails
+```
+
+The current implementation mitigates this using a recovery/sweeper mechanism that finds workflows stuck in `RUNNING` state and requeues them.
+
+A production implementation would use a stronger consistency mechanism such as the **Transactional Outbox Pattern**:
+
+```text
+                    +----------------+
+                    |   Transaction  |
+                    +-------+--------+
+                            |
+                +-----------+-----------+
+                |                       |
+                v                       v
+          Workflow State          Outbox Event
+                |                       |
+                +-----------+-----------+
+                            |
+                            v
+                    Outbox Publisher
+                            |
+                            v
+                         Kafka
+```
+
+This provides a reliable bridge between database state and asynchronous message delivery.
+
+---
+
+## 11. Multi-Tenancy & Noisy Neighbors
+
+The current implementation assumes a single-tenant environment.
+
+For a multi-tenant SaaS platform, high-volume tenants should not be able to starve other tenants.
+
+A possible architecture would be:
+
+- Small and medium tenants share a worker pool with per-tenant quotas.
+- Large enterprise tenants can receive dedicated capacity.
+- Queue partitions or worker pools can be isolated by tenant tier.
+- The API gateway can route requests based on tenant configuration and capacity.
+
+---
+
+# AI Usage
+
+AI tools were used to accelerate development of boilerplate and supporting code, including:
+
+- Initial project scaffolding
+- `package.json`
+- Docker configuration
+- Mock SQLite schemas
+
+The workflow execution model, failure semantics, persistence approach, and architectural decisions were designed and reviewed by me.
+
+I understand the implementation and the trade-offs described above.
