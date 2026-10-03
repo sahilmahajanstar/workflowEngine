@@ -170,7 +170,7 @@ The application will be available on:
 http://localhost:3000
 ```
 
-### Local Setup
+### Local Setup — SQLite
 
 Install dependencies:
 
@@ -191,17 +191,38 @@ npm run build
 npm start
 ```
 
+The local setup uses **SQLite** as the database with WAL mode enabled for concurrent reads and writes. No external services are required for local development.
+
+---
+
+### Docker — PostgreSQL
+
+The Docker Compose setup uses **PostgreSQL** as the database. The connection is configured automatically through environment variables.
+
+```bash
+docker-compose up --build
+```
+
+The `DB_TYPE` environment variable controls which database is used:
+
+```text
+DB_TYPE=postgres  → PostgreSQL (Docker / production)
+DB_TYPE=sqlite    → SQLite (default, local dev)
+```
+
+
 ---
 
 ## Testing
 
-Run the test suite with:
+The tests use **in-memory SQLite** so they require no external database or setup.
 
 ```bash
 npm run test
 ```
 
 The tests focus on the core workflow execution and state-transition logic.
+
 
 ---
 
@@ -251,6 +272,29 @@ A workflow should be treated as immutable once enrollments have started. To modi
 This prevents an in-flight enrollment from referencing a step that no longer exists.
 
 ---
+
+### Email Reply Detection
+
+The `send_email` action is a stub that logs the email rather than sending a real one.
+
+The sample workflow branches on whether a contact has the tag `replied`:
+
+```text
+Condition: does the contact have the tag "replied"?
+   |
+   +---- Yes → Add tag "engaged", call webhook to notify sales team
+   |
+   +---- No  → Wait 3 days, send follow-up email
+```
+
+In a real system, this tag would be applied by a separate integration, such as an email provider webhook that listens for reply events and tags the contact accordingly.
+
+For the purposes of this assignment, it is assumed that when a contact replies to an email, an external system has already tagged that contact with `replied` before the next condition step is evaluated.
+
+The engine itself does not implement email sending, reply detection, or any inbound email processing. These concerns are handled externally.
+
+---
+
 
 ### Wait Scheduling
 
@@ -430,15 +474,16 @@ This also provides buffering during traffic spikes.
 
 ---
 
-## 3. Persistent Workflow State
+## 3. Distributed State Storage
 
-The current SQLite implementation is intentionally simple for the assignment.
+The current implementation uses SQLite locally and PostgreSQL in the Docker environment. Both are suitable for the scope of this assignment.
 
-For production, I would move to PostgreSQL or another distributed persistence layer and configure connection pooling appropriately.
+For production at scale, I would move to a fully distributed persistence layer. Options include:
 
-SQLite currently uses WAL mode to improve concurrent read/write behavior.
+- **CockroachDB or Citus (distributed Postgres)** — for teams that want to keep the SQL model with horizontal write sharding
+- **DynamoDB or Cassandra** — for very high write throughput with a NoSQL model, at the cost of richer query capability
 
-At very high scale, state storage could be partitioned or moved to a distributed datastore depending on the access patterns.
+Connection pooling would be configured explicitly.
 
 ---
 
@@ -598,7 +643,7 @@ This makes each workflow step independently retryable and significantly simplifi
 
 One important failure window exists when both the database and a queue are involved.
 
-The current approach persists workflow state before enqueueing execution:
+The current approach persists workflow state **before** enqueueing execution:
 
 ```text
 Database write
@@ -607,43 +652,105 @@ Database write
 Queue publish
 ```
 
-This avoids a race where a worker completes a job before its initial database state has been persisted.
+This avoids a race condition where a fast worker completes a job before the initial database state is persisted. If the queue publish fails, the database-level sweeper (`recoverRunning`) detects the stuck `RUNNING` enrollment and requeues it within 5 minutes.
 
-However, it introduces a possible dual-write failure:
+However, it introduces a possible dual-write failure window:
 
 ```text
 DB write succeeds
       |
       X
-Queue publish fails
+Queue publish fails → sweeper catches it within 5 minutes
 ```
 
-The current implementation mitigates this using a recovery/sweeper mechanism that finds workflows stuck in `RUNNING` state and requeues them.
-
-A production implementation would use a stronger consistency mechanism such as the **Transactional Outbox Pattern**:
-
-```text
-                    +----------------+
-                    |   Transaction  |
-                    +-------+--------+
-                            |
-                +-----------+-----------+
-                |                       |
-                v                       v
-          Workflow State          Outbox Event
-                |                       |
-                +-----------+-----------+
-                            |
-                            v
-                    Outbox Publisher
-                            |
-                            v
-                         Kafka
-```
-
-This provides a reliable bridge between database state and asynchronous message delivery.
+For production at scale, there are two stronger approaches, ordered by preference:
 
 ---
+
+### Preferred: Kafka-First Event Sourcing
+
+At high throughput, the API does not write to the database at all on the ingestion path.
+
+```text
+API
+ |
+ v
+Kafka (durable event log)
+ |
+ v
+Worker consumes event
+ |
+ v
+Execute step → update Database
+```
+
+The Kafka offset is only committed **after** the database update succeeds. If the worker crashes between consuming and committing, Kafka automatically redelivers the message to another worker.
+
+This eliminates the dual-write problem entirely on the hot path. There is no need for a sweeper on the ingestion side because Kafka itself is the source of truth for pending work.
+
+Workers must be **idempotent** since Kafka provides at-least-once delivery.
+
+---
+
+### Alternative: Transactional Outbox Pattern
+
+If a relational database is already the primary system and Kafka-first would be a significant architectural shift, the Transactional Outbox Pattern provides a strong consistency guarantee:
+
+```text
+Single SQL Transaction
+      |
+      +---- Workflow State (enrollments table)
+      |
+      +---- Outbox Event (outbox table)
+            |
+            v
+      Outbox Publisher (CDC or polling)
+            |
+            v
+         Kafka
+```
+
+This guarantees that the workflow state and the queued message are always in sync, because they are written atomically.
+
+However, this pattern has **throughput limitations at scale**. Every event requires a synchronous SQL write to two tables inside a transaction, which limits how much you can push through a single database. At very high RPS, the database becomes a bottleneck that the Kafka-first approach avoids entirely.
+
+---
+
+### Best of Both: DynamoDB Transactions + CDC Streams
+
+This approach solves the throughput limitation of the SQL Transactional Outbox while still retaining full atomicity — no sweeper required.
+
+DynamoDB's `TransactWriteItems` atomically writes both the workflow state and the outbox event in a single operation, just like a SQL transaction but at DynamoDB's scale:
+
+```text
+DynamoDB TransactWriteItems (atomic)
+      |
+      +---- enrollments table  (workflow state)
+      |
+      +---- outbox table       (pending event record)
+            |
+            v
+      DynamoDB Streams (CDC — no polling, event-driven)
+            |
+            v
+         Kafka
+            |
+            v
+         Worker consumes and executes step
+```
+
+The key advantages over the SQL Transactional Outbox:
+
+- **Atomic write** — workflow state and outbox event are always in sync, even across failures
+- **DynamoDB scales horizontally** — no single-node database bottleneck at high RPS
+- **DynamoDB Streams is CDC** — changes are delivered in real time without polling the outbox table
+- **Kafka decouples workers** — workers consume at their own pace, independently of the write path
+
+Workers must still be idempotent since Kafka provides at-least-once delivery.
+
+---
+
+
 
 ## 11. Multi-Tenancy & Noisy Neighbors
 
