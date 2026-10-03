@@ -1,4 +1,5 @@
 import { logger } from '../utils/Logger';
+import { Clock } from '../utils/Clock';
 import { IEnrollmentRepository } from '../db/repositories/IEnrollmentRepository';
 import { IExecutionHistoryRepository } from '../db/repositories/IExecutionHistoryRepository';
 import { RelationalSchema, Contact, Enrollment, EnrollmentStatus, ExecutionResultType } from '../types';
@@ -74,7 +75,7 @@ export class WorkflowEngine {
   }
 
   async recoverRunning() {
-    const fiveMinutesAgo = new Date(Date.now() - (5 * 60 * 1000));
+    const fiveMinutesAgo = new Date(Clock.now() - (5 * 60 * 1000));
     const stuck = await this.enrollments.getStuckRunning(fiveMinutesAgo);
     
     for (const enrollment of stuck) {
@@ -181,7 +182,7 @@ export class WorkflowEngine {
   }
 
   async resumeWaiting() {
-    const now = Date.now();
+    const now = Clock.now();
     const pending = await this.enrollments.getPendingWaits(now);
     for (const enrollment of pending) {
       enrollment.waitUntil = null;

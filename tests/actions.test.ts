@@ -3,6 +3,7 @@ import { WaitAction } from '../src/actions/WaitAction';
 import { SendEmailAction } from '../src/actions/SendEmailAction';
 import { CallWebhookAction } from '../src/actions/CallWebhookAction';
 import { Enrollment, EnrollmentStatus, ExecutionResultType } from '../src/types';
+import { Clock, TestableClock } from '../src/utils/Clock';
 
 describe('Actions', () => {
   let enrollment: Enrollment;
@@ -72,7 +73,18 @@ describe('Actions', () => {
   });
 
   describe('WaitAction', () => {
-    it('should return WAIT with future date', async () => {
+    let testClock: TestableClock;
+
+    beforeEach(() => {
+      testClock = new TestableClock(1000000000000); // arbitrary start time
+      Clock.set(testClock);
+    });
+
+    afterEach(() => {
+      Clock.reset();
+    });
+
+    it('should return WAIT with future date based on Clock', async () => {
       const action = new WaitAction();
       const stepDef = {
         id: 'step-wait',
@@ -82,12 +94,11 @@ describe('Actions', () => {
         nextStepId: 'step-after'
       };
 
-      const before = Date.now();
       const result = await action.execute(enrollment, stepDef as any);
       
       expect(result.type).toBe(ExecutionResultType.WAIT);
       expect(result.waitUntil).toBeInstanceOf(Date);
-      expect(result.waitUntil!.getTime()).toBeGreaterThan(before);
+      expect(result.waitUntil!.getTime()).toBe(1000000010000);
     });
   });
   
